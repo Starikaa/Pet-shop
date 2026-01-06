@@ -345,7 +345,7 @@ app.post('/api/orders', async (req, res) => {
                     .query("UPDATE PCC_Campaign SET num_of_clicks = @newClicks WHERE campaign_id = @cid");
             }
         }
-
+        res.json({ message: "Đặt hàng thành công! 🐾" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -390,15 +390,17 @@ app.get('/api/admin/orders', async (req, res) => {
 
 // Cập nhật trạng thái đơn hàng (C13)
 app.put('/api/admin/orders/status', async (req, res) => {
-    const { orderId, newStatus } = req.body;
     try {
+        const { orderId, newStatus } = req.body;
         let pool = await sql.connect(dbConfig);
         await pool.request()
-            .input('oid', sql.Int, orderId)
+            .input('id', sql.Int, orderId)
             .input('status', sql.NVarChar, newStatus)
-            .query('UPDATE [Order] SET status_order = @status WHERE order_id = @oid');
-        res.json({ message: "Cập nhật trạng thái thành công!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+            .query('UPDATE [Order] SET status_order = @status WHERE order_id = @id');
+        res.json({ message: "Cập nhật trạng thái thành công" });
+    } catch (err) {
+        res.status(500).send(err.message);
+    }
 });
 
 // Lấy lịch sử đơn hàng của 1 khách hàng (C08)
@@ -638,37 +640,54 @@ app.post('/api/admin/ppc', upload.single('banner'), async (req, res) => {
 
 app.put('/api/admin/ppc/:id', upload.single('banner'), async (req, res) => {
     try {
-        // 1. Ép kiểu số ngay lập tức để tránh NaN
         const nNewCPC = Number(req.body.cost_per_click || 0);
         const { campaign_name, budget, status } = req.body;
         const campaignId = req.params.id;
+        const nNewBudget = Number(budget);
 
         let pool = await sql.connect(dbConfig);
 
+        // 1. Lấy dữ liệu hiện tại để kiểm tra
         const oldData = await pool.request()
             .input('cid', sql.Int, campaignId)
-            .query(`SELECT status, p.product_id, p.price, ppc.cost_per_click 
+            .query(`SELECT status, p.product_id, p.price, ppc.cost_per_click, ppc.num_of_clicks 
                     FROM PCC_Campaign ppc 
                     JOIN Product p ON ppc.product_id = p.product_id 
                     WHERE ppc.campaign_id = @cid`);
 
         if (oldData.recordset.length > 0) {
-            const { status: oldStatus, product_id, price: currentPrice, cost_per_click: oldCPC } = oldData.recordset[0];
+            const {
+                status: oldStatus,
+                product_id,
+                price: currentPrice,
+                cost_per_click: oldCPC,
+                num_of_clicks
+            } = oldData.recordset[0];
 
+            // TÍNH TOÁN SỐ TIỀN ĐÃ TIÊU
+            const spent = num_of_clicks * oldCPC;
+
+            // KIỂM TRA ĐIỀU KIỆN KHỞI ĐỘNG LẠI (ADMIN RESTART)
+            if (oldStatus === 'Ended' && status === 'Active') {
+                if (nNewBudget <= spent) {
+                    return res.status(400).json({
+                        error: `Không thể kích hoạt! Ngân sách (${nNewBudget.toLocaleString()}đ) phải lớn hơn số tiền đã tiêu (${spent.toLocaleString()}đ). Vui lòng tăng ngân sách!`
+                    });
+                }
+            }
+
+            // Logic tính toán lại giá sản phẩm (Giữ nguyên hoặc tối ưu)
             let nPrice = Number(currentPrice);
             let nOldCPC = Number(oldCPC);
 
-            // 2. Logic tính toán lại giá sản phẩm
             if (oldStatus === 'Active' && status === 'Ended') {
-                nPrice = nPrice + nOldCPC; // Hoàn lại giá khi dừng quảng cáo
+                nPrice = nPrice + nOldCPC; // Hoàn lại giá gốc
             } else if (oldStatus === 'Ended' && status === 'Active') {
-                nPrice = nPrice - nNewCPC; // Trừ giá khi kích hoạt lại quảng cáo
+                nPrice = nPrice - nNewCPC; // Trừ giá khuyến mãi mới
             } else if (oldStatus === 'Active' && status === 'Active' && nOldCPC !== nNewCPC) {
-                // Đổi mức giảm khi đang chạy: Hoàn mức cũ, trừ mức mới
                 nPrice = nPrice + nOldCPC - nNewCPC;
             }
 
-            // 3. KIỂM TRA CHẶN LỖI NULL/NaN
             if (!isNaN(nPrice) && nPrice !== Number(currentPrice)) {
                 await pool.request()
                     .input('pid', sql.Int, product_id)
@@ -677,14 +696,14 @@ app.put('/api/admin/ppc/:id', upload.single('banner'), async (req, res) => {
             }
         }
 
-        // 4. Cập nhật thông tin chiến dịch PPC sử dụng nNewCPC đã định nghĩa
+        // 2. Cập nhật thông tin chiến dịch vào Database
         let bannerUrl = req.body.banner_url;
         if (req.file) bannerUrl = req.file.path;
 
         await pool.request()
             .input('id', sql.Int, campaignId)
             .input('name', sql.NVarChar, campaign_name)
-            .input('budget', sql.Decimal, budget)
+            .input('budget', sql.Decimal, nNewBudget)
             .input('status', sql.NVarChar, status)
             .input('cpc', sql.Decimal, nNewCPC)
             .input('url', sql.VarChar, bannerUrl)
@@ -692,7 +711,7 @@ app.put('/api/admin/ppc/:id', upload.single('banner'), async (req, res) => {
                     status = @status, cost_per_click = @cpc, banner_url = @url 
                     WHERE campaign_id = @id`);
 
-        res.json({ message: "Cập nhật thành công!" });
+        res.json({ message: "Cập nhật và kích hoạt chiến dịch thành công!" });
     } catch (err) {
         res.status(500).json({ error: "Lỗi hệ thống: " + err.message });
     }
@@ -705,6 +724,58 @@ app.get('/api/ppc/active', async (req, res) => {
             .query("SELECT * FROM PCC_Campaign WHERE status = 'Active' ORDER BY campaign_id DESC");
         res.json(result.recordset);
     } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/orders/cancel/:id', async (req, res) => {
+    try {
+        const orderId = req.params.id;
+        let pool = await sql.connect(dbConfig);
+
+        // 1. Lấy thông tin từ bảng Order_Item (nơi chứa số lượng thực tế)
+        const orderInfo = await pool.request()
+            .input('oid', sql.Int, orderId)
+            .query(`
+                SELECT oi.product_id, oi.num_per_prod, o.status_order 
+                FROM [Order] o
+                JOIN Order_Item oi ON o.order_id = oi.order_id
+                WHERE o.order_id = @oid
+            `);
+
+        if (orderInfo.recordset.length === 0) {
+            return res.status(404).json({ error: "Không tìm thấy thông tin sản phẩm trong đơn hàng!" });
+        }
+
+        const order = orderInfo.recordset[0];
+
+        // Kiểm tra trạng thái: Chỉ cho hủy nếu đang "Chờ xác nhận" hoặc tương đương
+        if (order.status_order === 'Đã hủy' || order.status_order === 'Giao hàng thành công') {
+            return res.status(400).json({ error: "Đơn hàng này đã kết thúc, không thể hủy!" });
+        }
+
+        // 2. Sử dụng Transaction để đảm bảo tính toàn vẹn dữ liệu
+        const transaction = new sql.Transaction(pool);
+        await transaction.begin();
+        try {
+            // Cập nhật trạng thái đơn hàng thành 'Đã hủy'
+            await transaction.request()
+                .input('oid', sql.Int, orderId)
+                .query("UPDATE [Order] SET status_order = N'Đã hủy' WHERE order_id = @oid");
+
+            // Cộng lại số lượng sản phẩm vào kho (num_per_prod lấy từ Order_Item)
+            await transaction.request()
+                .input('pid', sql.Int, order.product_id)
+                .input('qty', sql.Int, order.num_per_prod)
+                .query("UPDATE Product SET num_product = num_product + @qty WHERE product_id = @pid");
+
+            await transaction.commit();
+            res.json({ message: "Hủy đơn hàng thành công và đã hoàn kho!" });
+        } catch (err) {
+            await transaction.rollback();
+            throw err;
+        }
+    } catch (err) {
+        res.status(500).json({ error: "Lỗi: " + err.message });
+    }
 });
 
 // API: Xóa danh mục (Lưu ý: Chỉ xóa được nếu không có sản phẩm nào thuộc loại này)
@@ -751,7 +822,17 @@ app.get('/api/products/:id', async (req, res) => {
         let result = await pool.request()
             .input('id', sql.Int, req.params.id)
             .query(`
-                SELECT p.*, ppc.cost_per_click as discount_amount
+                SELECT p.*, 
+                       ppc.cost_per_click as discount_amount,
+                       ppc.budget,
+                       ppc.num_of_clicks,
+                       ppc.status as ppc_status,
+                       -- Tính số lượng tối đa có thể giảm giá dựa trên ngân sách còn lại
+                       CASE 
+                         WHEN ppc.status = 'Active' THEN 
+                            FLOOR((ppc.budget - (ppc.num_of_clicks * ppc.cost_per_click)) / ppc.cost_per_click)
+                         ELSE 0 
+                       END as max_discount_qty
                 FROM Product p
                 LEFT JOIN PCC_Campaign ppc ON p.product_id = ppc.product_id AND ppc.status = 'Active'
                 WHERE p.product_id = @id
