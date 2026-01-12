@@ -12,7 +12,6 @@ CREATE TABLE Role (
 CREATE TABLE Category (
     category_id NVARCHAR(8) PRIMARY KEY,
     category_name NVARCHAR(32) NOT NULL,
-    detail_category NVARCHAR(255),
 	category_icon NVARCHAR(50)
 );
 
@@ -99,14 +98,6 @@ CREATE TABLE PCC_Campaign (
     CONSTRAINT FK_PCC_Admin FOREIGN KEY (creator_id) REFERENCES [User](user_id),
 	CONSTRAINT FK_PCC_Product FOREIGN KEY (product_id) REFERENCES Product(product_id),
 );
-
--- 10. Bảng Click-log (Nhật ký bấm quảng cáo)
-CREATE TABLE Click_Log (
-    click_id INT IDENTITY(1,255) PRIMARY KEY,
-    campaign_id INT NOT NULL,
-    click_time DATETIME DEFAULT GETDATE(),
-    CONSTRAINT FK_Click_Campaign FOREIGN KEY (campaign_id) REFERENCES PCC_Campaign(campaign_id)
-);
 GO
 INSERT INTO Role (role_id, role_status) VALUES 
 ('CUS', 'Customer'),
@@ -114,17 +105,6 @@ INSERT INTO Role (role_id, role_status) VALUES
 ('ADM', 'Admin');
 INSERT INTO [User] (role_id, full_name, email, password, status)
 VALUES ('ADM', N'Quản trị viên trưởng', 'admin@fellua.com', 'lmao', 'Active');
-
-SELECT * FROM [User]
-SELECT * FROM Product
-SELECT * FROM PCC_Campaign
-
-
-SELECT category_id, category_name, category_icon FROM Category
-DELETE FROM PCC_Campaign WHERE campaign_id  = 'TOY'
-
-DELETE FROM PCC_Campaign
-
 
 INSERT INTO Category (category_id, category_name) VALUES  
 ('ACC', N'Phụ kiện & Đồ dùng'), ('CAT', N'Mèo'), 
@@ -198,10 +178,6 @@ BEGIN
 END;
 GO
 
-ALTER TABLE Category 
-ADD category_icon NVARCHAR(50);
-GO
-
 UPDATE Category SET category_icon = N'🐶' WHERE category_id = 'DOG';
 UPDATE Category SET category_icon = N'🐱' WHERE category_id = 'CAT';
 UPDATE Category SET category_icon = N'🐦' WHERE category_id = 'BIRD';
@@ -210,6 +186,4 @@ UPDATE Category SET category_icon = N'🦴' WHERE category_id = 'ACC';
 UPDATE Category SET category_icon = N'🐟' WHERE category_id = 'FISH';
 UPDATE Category SET category_icon = N'🐰' WHERE category_id = 'RAB';
 UPDATE Category SET category_icon = N'🦎' WHERE category_id = 'REP';
-ALTER TABLE PCC_Campaign 
-ADD banner_url NVARCHAR(MAX);
-GO
+
